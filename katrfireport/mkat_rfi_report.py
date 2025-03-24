@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Dict, List
 import json
 import os
 
@@ -13,118 +13,261 @@ import bokeh.plotting
 import bokeh.model
 import bokeh.models
 import bokeh.resources
-from bokeh.io import output_notebook
-from bokeh.layouts import gridplot, column
+from bokeh.io import show, output_file
+from bokeh.layouts import column
 from bokeh.models import LinearColorMapper, ColorBar, BasicTicker
-from bokeh.models.widgets import Panel
-from bokeh.models.widgets import Tabs
+from bokeh.models.layouts import TabPanel as Panel
+from bokeh.models.layouts import Tabs
 from bokeh.models import Range1d
 import warnings
 warnings.filterwarnings('ignore')
 
 
-class PlotFreqTimeStats:
-    """Collect RFI statistics for frequency-time plot."""
-    def __init__(self, dataset: katdal.DataSet, **kwargs) -> None:
+class BasePlot:
+    """Base class for plotting frequency-based RFI statistics."""
+
+    def __init__(self, dataset, **kwargs) -> None:
+        self.dataset = dataset
+        self.frequency = dataset.freqs / 1e6  # Convert frequency to MHz
         self.unixtime = dataset.timestamps  # Unix timestamps
-        self.frequency = dataset.freqs/1e6  # Frequency in MHz
         self.x_range = Range1d(self.frequency.min(), self.frequency.max())
-        self.y_range = Range1d(0, len(self.unixtime))
 
     @staticmethod
-    def _waterfall_plot(fig: bokeh.plotting.Figure, *args, **kwargs) -> None:
+    def _waterfall_plot(fig: bokeh.plotting.figure, *args, **kwargs) -> None:
+        """Helper function to add a waterfall image plot with a colorbar."""
         fig.image(*args, **kwargs)
-        # Creating a colorbar object
-        color = LinearColorMapper(palette="Viridis256", low=0, high=1)
-        cb = ColorBar(color_mapper=color, location=(5, 6), ticker=BasicTicker())
-        fig.add_layout(cb, 'right')
+        color_mapper = LinearColorMapper(palette="Viridis256", low=0, high=1)
+        color_bar = ColorBar(color_mapper=color_mapper, location=(5, 6), ticker=BasicTicker())
+        fig.add_layout(color_bar, 'right')
 
     def make_rfi_stats_data_source(self, two_d_array) -> bokeh.models.ColumnDataSource:
-        data = {'image': two_d_array}
-        return bokeh.models.ColumnDataSource(data)
+        """Create a Bokeh data source from a 2D RFI statistics array."""
+        return bokeh.models.ColumnDataSource({'image': two_d_array})
 
-    def format_fig(self, title, pol, dataset: katdal.DataSet):
-        fig = bokeh.plotting.figure(
-        x_axis_label='Frequency MHz',
-        y_axis_label=('Pol {} Scans').format(pol),
-        sizing_mode='stretch_width',
-        title=title,
-        width=1000, height=500, toolbar_location='above')
-        return fig
+    def format_fig(self, title: str, pol: str):
+        """Format a Bokeh figure for plotting."""
+        return bokeh.plotting.figure(
+            x_axis_label='Frequency [MHz]',
+            y_axis_label=f'Pol {pol} Measurements',
+            sizing_mode='stretch_width',
+            title=title,
+            width=1000, height=500, toolbar_location='above'
+        )
 
-    def freq_time_fig(self, dataset: katdal.DataSet, title, pol,
-                      source: bokeh.models.ColumnDataSource) -> bokeh.model.Model:
+    def collect_plots(self) -> Dict[str, Dict[str, bokeh.model.Model]]:
+        """Generate frequency-based RFI plots for both HH and VV polarizations."""
+        pols = ['HH', 'VV']
+        plots_per_pol = {pol: self.make_plots(pol) for pol in pols}
+        return plots_per_pol
+
+    def make_plots(self, pol: str) -> Dict[str, bokeh.model.Model]:
+        """Generate RFI plots for different flags."""
+        flags = ['data_lost', 'cam', 'ingest_rfi', 'cal_rfi', 'combined_flags']
+        plots = {}
+
+        for flag in flags:
+            logging.info(f'Processing {flag} for polarization {pol}')
+            if flag != "combined_flags":
+                self.dataset.select(scans='track', corrprods='cross', flags=flag, pol=pol)
+            else:
+                self.dataset.select(scans='track', corrprods='cross', pol=pol)
+
+            two_d_array = self.extract_rfi_data(self.dataset)
+            source = self.make_rfi_stats_data_source(two_d_array)
+            fig = self.twoD_fig(flag, pol, source)
+            plots[flag] = fig
+
+        return plots
+
+    def extract_rfi_data(self, dataset):
+        """Abstract method to extract RFI data."""
+        raise NotImplementedError("This method must be implemented in subclasses.")
+
+    def write_metadata(self, dataset: katdal.DataSet, filename: str) -> None:
+        """Write metadata to a JSON file."""
+
+        metadata = {
+            "ProductType": {
+                "ProductTypeName": "MeerKATReductionProduct",
+                "ReductionName": "RFIReport"
+            },
+            "Description": dataset.obs_params.get("description", "N/A"),
+            "ScheduleBlockIdCode": dataset.obs_params.get("sb_id_code", "N/A"),
+            "ProposalId": dataset.obs_params.get("proposal_id", "N/A"),
+            "CaptureBlockId": dataset.obs_params.get("capture_block_id", "N/A"),
+        }
+
+        try:
+            with open(filename, "w") as f:
+                json.dump(metadata, f, allow_nan=False, indent=2)
+            logging.info(f"Metadata successfully written to {filename}")
+        except IOError as e:
+            logging.info(f"Error writing metadata to {filename}: {e}")
+
+
+class PlotFreqTimeStats(BasePlot):
+    """Plot RFI statistics for Frequency-Time visualization."""
+
+    def __init__(self, dataset, **kwargs) -> None:
+        super().__init__(dataset, **kwargs)
+        self.y_range = Range1d(0, len(self.unixtime))
+
+    def extract_rfi_data(self, dataset):
+        """Extract and process RFI data for frequency-time visualization."""
+        return np.mean(dataset.flags, axis=2)
+
+    def twoD_fig(self, title, pol,
+                 source: bokeh.models.ColumnDataSource) -> bokeh.model.Model:
+        """Generate a frequency-time plot."""
         fig = self.format_fig(title, pol)
-        freqs = self.frequency
         fig.x_range = self.x_range
         fig.y_range = self.y_range
-        y_ticks_dic = self.make_ticks(dataset)
-        fig.yaxis.ticker = np.array([*y_ticks_dic], dtype=np.float)
+        y_ticks_dic = self.make_ticks(self.dataset)
+        fig.yaxis.ticker = np.array(list(y_ticks_dic.keys()), dtype=np.float64)
         fig.yaxis.major_label_overrides = y_ticks_dic
         self._waterfall_plot(
-            fig, image=[source.data['image']], x=freqs.min(),
-            y=0, dw=freqs.max()-freqs.min(),
-            dh=len(self.unixtime), palette="Viridis256")
+            fig, image=[source.data['image']], x=self.frequency.min(),
+            y=0, dw=self.frequency.max() - self.frequency.min(),
+            dh=len(self.unixtime), palette="Viridis256"
+        )
         return fig
 
     def make_ticks(self, dataset: katdal.DataSet):
-        """Make axis ticks"""
-        # Make yticks dictionary required by bokeh
-        targets = [scan[2].name for scan in dataset.scans()]
-        nscans = dataset.shape[0]
-        step = nscans//len(targets)+1
-        indices = np.arange(0, nscans)[::step]+10
-        y_ticks_dic = {}
-        for i in range(len(targets)):
-            y_ticks_dic[str(indices[i])] = targets[i]
-        return y_ticks_dic
+        """Generate y-axis tick labels for Bokeh plots."""
 
-    def make_plots(self, pol, dataset: katdal.DataSet) -> Dict[str, bokeh.model.Model]:
-        """Generate Bokeh figures for the plots."""
+        # Extract scan names and observation targets
+        scans = [scan[2].name for scan in dataset.scans()]
+        targets = [
+            dataset.sensor.get('Observation/target').__getitem__(i).name
+            for i in range(dataset.shape[0])
+        ]
 
-        flags = ['data_lost', 'cam', 'ingest_rfi', 'cal_rfi', 'combined_flags']
-        plots_source = {}
-        for i in range(len(flags)):
-            logging.info(' {} flags'.format(flags[i]))
-            if flags[i] != 'combined_flags':
-                dataset.select(scans='track', corrprods='cross', flags=flags[i], pol=pol)
-            else:
-                dataset.select(scans='track', corrprods='cross', pol=pol)
-            two_d_array = np.mean(dataset.flags[:, :, :], axis=2)
-            source = self.make_rfi_stats_data_source(two_d_array)
-            fig = self.freq_time_fig(dataset, flags[i], pol, source)
-            plots_source[flags[i]] = fig
-        return plots_source
+        # Create y-axis values
+        num_timestamps = len(targets)
+        y_values = np.arange(num_timestamps)
 
-    def collect_plots(self, dataset: katdal.DataSet):
-        """Collect HH and VV frequency time plots."""
+        # Determine step size for tick selection
+        step = max(1, num_timestamps // (len(scans) + 1))
 
-        pols = ['HH', 'VV']
-        plots_per_pol = {}
-        for i in range(len(pols)):
-            logging.info('Processing {} polarization'.format(pols[i]))
-            plots_per_pol[pols[i]] = self.make_plots(pols[i], dataset)
-        return plots_per_pol
+        # Select ticks and corresponding labels
+        selected_ticks = y_values[::step]
+        selected_labels = {int(y): targets[i] for i, y in enumerate(selected_ticks)}
+        return selected_labels
 
-    def write_metadata(self, dataset: katdal.DataSet,
-                       filename: str) -> None:
-        metadata = {
-            'ProductType': {
-                'ProductTypeName': 'MeerKATReductionProduct',
-                'ReductionName': 'RFIReport'
-            },
-            'Description': dataset.obs_params['description'],
-            'ScheduleBlockIdCode': dataset.obs_params['sb_id_code'],
-            'ProposalId': dataset.obs_params['proposal_id'],
-            'CaptureBlockId': dataset.obs_params['capture_block_id']
+
+class PlotFreqBaseline(BasePlot):
+    """Plot RFI statistics for Frequency-Baseline visualization."""
+
+    def __init__(self, dataset, path_bl_csv: str, **kwargs) -> None:
+        super().__init__(dataset, **kwargs)
+        self.path_bl_csv = path_bl_csv
+        self.ordered_bl = self.get_bl_idx(dataset)[1]
+        self.y_range = Range1d(self.ordered_bl.min(), self.ordered_bl.max())
+
+    def get_bl_idx(self, dataset):
+        """Get ordered baseline indices."""
+        bl_lens = pd.read_csv(self.path_bl_csv)
+        corrprods = self.get_corrprods(dataset)
+        bl_idx = np.argsort([bl_lens[corr].values[0] for corr in corrprods])
+        ordered_bl = np.array([bl_lens[corr].values[0] for corr in corrprods])[bl_idx]
+        return bl_idx, ordered_bl
+
+    def get_corrprods(self, dataset):
+        """Get correlation products."""
+        return np.array([bl[0][:-1] + bl[1][:-1] for bl in dataset.corr_products])
+
+    def extract_rfi_data(self, dataset):
+        """Extract and process RFI data for frequency-baseline visualization."""
+        two_d_array = np.mean(dataset.flags, axis=0)
+        bl_idx = self.get_bl_idx(dataset)[0]
+        return two_d_array[:, bl_idx].T
+
+    def twoD_fig(self, title, pol, source: bokeh.models.ColumnDataSource) -> bokeh.model.Model:
+        """Generate a frequency-baseline plot."""
+        fig = self.format_fig(title, pol)
+        fig.x_range = self.x_range
+        fig.y_range = self.y_range
+
+        self._waterfall_plot(
+            fig, image=[source.data['image']], x=self.frequency.min(),
+            y=self.ordered_bl.min(),
+            dw=self.frequency.max() - self.frequency.min(),
+            dh=self.ordered_bl.max() - self.ordered_bl.min(),
+            palette="Viridis256"
+        )
+        return fig
+
+
+class RfiReportLayout:
+    """Create an RFI Report layout and generate an HTML report."""
+
+    def __init__(self, bokeh_models: Dict[str, Dict[str, object]], filename: str) -> None:
+        """
+        Initialize the RFI report layout.
+
+        Parameters:
+        -----------
+        bokeh_models : dict
+            Dictionary containing Bokeh plots categorized by polarization and flag type.
+        filename : str
+            Output filename for the HTML report.
+        """
+        self.plots = bokeh_models
+        self.filename = filename
+
+    def create_layout(self) -> None:
+        """
+        Generate a Bokeh layout with categorized RFI flag plots and save it as an HTML file.
+        """
+        # Extract plots for HH and VV polarizations
+        hh_plots = self.plots['HH']
+        vv_plots = self.plots['VV']
+
+        # Define flag categories
+        flag_categories = {
+            "All flags": "combined_flags",
+            "Ingest RFI flags": "ingest_rfi",
+            "Cal RFI flags": "cal_rfi",
+            "Data lost RFI flags": "data_lost",
+            "Cam RFI flags": "cam"
         }
-        with open(filename, 'w') as f:
-            json.dump(metadata, f, allow_nan=False, indent=2)
 
-    def create_main_html(self, main_filename, other_html_files, output_dir):
-        # Content of main HTML file
-        main_html_content = """
-        <!DOCTYPE html>
+        # Create Bokeh panels for each flag category
+        tabs = [
+            Panel(
+                child=column(hh_plots[flag], vv_plots[flag], sizing_mode="stretch_width"),
+                title=title
+            )
+            for title, flag in flag_categories.items()
+        ]
+
+        # Assemble and display the layout
+        layout = Tabs(tabs=tabs)
+        logging.info(f"Saving report to: {self.filename}")
+        output_file(self.filename, mode='cdn')
+        show(layout)
+
+    def create_main_html(self, main_filename: str, other_html_files: List[str],
+                         output_dir: str) -> None:
+        """
+        Create a main HTML file that links multiple RFI report HTML files together.
+
+        Parameters:
+        -----------
+        main_filename : str
+            Path to the main HTML output file.
+        other_html_files : list
+            List of HTML report filenames to be embedded.
+        output_dir : str
+            Directory where the HTML reports are stored.
+        """
+        plot_types = [
+            "Frequency-Time RFI Statistics",
+            "Frequency-Baseline RFI Statistics"
+        ]
+
+        # Start HTML content
+        main_html_content = """<!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
@@ -134,147 +277,18 @@ class PlotFreqTimeStats:
         <body>
             <h1>MeerKAT RFI Report</h1>
         """
-        plot_types = ['Frequency-Time RFI Statistics', 'Frequency-Baseline RFI Statistics']
-        # Read and embed the content of other HTML files
+
+        # Embed each additional HTML report
         for i, html_file in enumerate(other_html_files):
-            html_f = os.path.join(output_dir, html_file)
-            with open(html_f, "r") as file:
-                html_content = file.read()
-                main_html_content += f"<h2>{plot_types[i]}</h2>"
-                main_html_content += html_content
+            html_path = os.path.join(output_dir, html_file)
+            with open(html_path, "r") as file:
+                main_html_content += f"<h2>{plot_types[i]}</h2>\n{file.read()}"
 
-        main_html_content += """
-        </body>
-        </html>
-        """
+        # Close HTML structure
+        main_html_content += "\n</body>\n</html>"
 
-        # Write content to main HTML file
+        # Write to the main HTML file
         with open(main_filename, "w") as file:
             file.write(main_html_content)
 
-
-class PlotFreqBaseline(PlotFreqTimeStats):
-    """Collect RFI for frequency-baeline statistics."""
-
-    def __init__(self, dataset: katdal.DataSet, **kwargs) -> None:
-        self.path_bl_csv = kwargs['path_bl_csv']
-        self.frequency = dataset.freqs/1e6  # Frequency in MHz
-        self.unixtime = dataset.timestamps  # Unix timestamps
-        self.x_range = Range1d(self.frequency.min(), self.frequency.max())
-        self.ordered_bl = self.get_bl_idx(dataset)[1]
-        self.y_range = Range1d(self.ordered_bl.min(), self.ordered_bl.max())
-
-    def get_bl_idx(self, dataset: katdal.DataSet):
-        """
-        Get the indices of the correlation products.
-
-        Parameters:
-        -----------
-        vis : katdal.visdatav4.VisibilityDataV4
-           katdal data object
-
-        Returns:
-        --------
-        output : numpy array
-           array of ordered baseline indices
-        """
-        bl_lens = pd.read_csv(self.path_bl_csv)
-        corrprods = self.get_corrprods(dataset)
-        corrprod_bl = []
-        for corrprod in corrprods:
-            corrprod_bl.append(bl_lens[corrprod].values[0])
-        # Baseline length as per correlation products
-        corrprod_bl = np.array(corrprod_bl)
-        bl_idx = np.argsort(corrprod_bl)
-        ordered_bl = corrprod_bl[bl_idx]
-        return bl_idx, ordered_bl
-
-    def get_corrprods(self, dataset: katdal.DataSet):
-        """
-        Get the correlation products
-
-        Parameters:
-        ----------
-        vis : katdal.visdatav4.VisibilityDataV4
-           katdal data object
-
-        Returns:
-        --------
-        output : numpy array
-             array of anntena combination of the correlation products
-        """
-        bl = dataset.corr_products
-        corrprods = []
-        for i in range(len(bl)):
-            corrprods.append((bl[i][0][0:-1]+bl[i][1][0:-1]))
-        return np.array(corrprods)
-
-    def make_plots(self, pol, dataset: katdal.DataSet) -> Dict[str, bokeh.model.Model]:
-        """Generate Bokeh figures for the plots."""
-        flags = ['data_lost', 'cam', 'ingest_rfi', 'cal_rfi', 'combined_flags']
-        plots_source = {}
-
-        for i in range(len(flags)):
-            logging.info(' {} flags'.format(flags[i]))
-            if flags[i] != 'combined_flags':
-                dataset.select(scans='track', corrprods='cross', flags=flags[i], pol=pol)
-            else:
-                dataset.select(scans='track', corrprods='cross', pol=pol)
-            two_d_array = np.mean(dataset.flags[:, :, :], axis=0)
-            bl_idx = self.get_bl_idx(dataset)[0]
-            two_d_array = two_d_array[:, bl_idx]
-            source = self.make_rfi_stats_data_source(two_d_array.T)
-            fig = self.freq_time_fig(dataset, flags[i], pol, source)
-            plots_source[flags[i]] = fig
-        return plots_source
-
-    def freq_time_fig(self, dataset: katdal.DataSet, title, pol,
-                      source: bokeh.models.ColumnDataSource) -> bokeh.model.Model:
-        fig = self.format_fig(title, pol)
-        freqs = self.frequency
-        fig.x_range = self.x_range
-        fig.y_range = self.y_range
-        self._waterfall_plot(
-            fig, image=[source.data['image']],
-            x=freqs.min(), y=self.ordered_bl.min(),
-            dw=freqs.max()-freqs.min(),
-            dh=self.ordered_bl.max()-self.ordered_bl.min(),
-            palette="Viridis256")
-        return fig
-
-      def format_fig(self, title, pol, dataset: katdal.DataSet):    
-        fig = bokeh.plotting.figure(
-            x_axis_label='Frequency [MHz]',
-            y_axis_label=('Pol {} Baseline length [m]').format(pol),
-            sizing_mode='stretch_width',
-            title=title,
-            width=1000, height=500, toolbar_location='above')
-
-
-class RfiReportLayout:
-    """Create RFI Report layout"""
-    def __init__(self, bokeh_models, **kwargs) -> None:
-            self.plots = bokeh_models
-            self.cbid = kwargs['cbid']
-    def create_layout(self):
-        plots = self.plots
-        HH = plots['HH']
-        VV = plots['VV']
-        system_flags = column(HH['combined_flags'], VV['combined_flags'])
-        ingest_flags = column( HH['ingest_rfi'], VV['ingest_rfi'])
-        cal_flags = column( HH['cal_rfi'], VV['cal_rfi'])
-        data_lost = column(HH['data_lost'],VV['data_lost'] )
-        cam_flags = column( HH['cam'], VV['cam'])
-        # Create tabs
-        tab1 = Panel(child=system_flags, title='All flags')
-        tab2 = Panel(child=ingest_flags, title='Ingest RFI flags')
-        tab3 = Panel(child=cal_flags, title='Cal RFI flags')
-        tab4 = Panel(child=data_lost, title='data RFI flags')
-        tab5 = Panel(child=cam_flags, title='cam RFI flags')
-        
-        # create a layout from tabs
-        layout = Tabs(tabs=[tab1, tab2, tab3, tab4, tab5])
-        # save html layout into disk
-        filename='MeerKAT_RFI_Report_'+str(self.cbid)+'.html'
-        output_file(filename, mode='inline')
-        return show(layout)
+        logging.info(f"Main HTML report saved: {main_filename}")
