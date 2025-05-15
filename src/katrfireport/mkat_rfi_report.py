@@ -226,11 +226,11 @@ class RfiReportLayout:
         # Define flag categories
         flag_categories = {
             "All flags": "combined_flags",
-            "Ingest RFI flags": "ingest_rfi",
-            "Cal RFI flags": "cal_rfi",
-            "Data lost RFI flags": "data_lost",
-            "Cam RFI flags": "cam"
-        }
+            "Ingest flags": "ingest_rfi",
+            "Cal flags": "cal_rfi",
+            "Data lost flags": "data_lost",
+            "Cam flags": "cam"
+            }
 
         # Create Bokeh panels for each flag category
         tabs = [

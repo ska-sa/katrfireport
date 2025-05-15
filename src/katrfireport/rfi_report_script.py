@@ -4,11 +4,14 @@ import os
 import logging
 import sys
 import uuid
-
 import katdal
 from katsdpservices import setup_logging
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import katrfireport.mkat_rfi_report as report
+import mkat_rfi_report as report
+
+if sys.version_info >= (3, 9):
+    import importlib.resources as importlib_resources
+else:
+    import importlib_resources
 
 
 def create_parser():
@@ -41,8 +44,7 @@ def main() -> None:
     dataset = katdal.open(args.katdata, upgrade_flags=True)
     output_dir = '{}_{}'.format(args.prefix, uuid.uuid4())
     output_dir = os.path.join(args.output_dir, output_dir)
-    # Define the relative path to the baseline length file
-    path_bl_csv = os.path.join(os.path.dirname(__file__), '..', 'conf', 'meerkatbaselinelength.csv')
+    path_bl_csv = importlib_resources.files("katrfireport") / "conf/meerkatbaselinelength.csv"
     cbid = dataset.name.split('_')[0]
     tmp_dir = output_dir + '.writing'
     os.mkdir(tmp_dir)
@@ -59,7 +61,6 @@ def main() -> None:
                 rfi_stats = report.PlotFreqTimeStats(dataset)
             if val == 'freq_baseline':
                 rfi_stats = report.PlotFreqBaseline(dataset, path_bl_csv=path_bl_csv)
-            logging.info('Creating bokeh report for {}'.format(val))
             plots = rfi_stats.collect_plots()
             logging.info('Creating bokeh report for {}'.format(val))
             layout = report.RfiReportLayout(plots, filename)
