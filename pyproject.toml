@@ -1,38 +1,35 @@
 [project]
 name = "katrfireport"
-authors = [{name="Isaac Sihlangu", email='isihlangu@sarao.ac.za'},]
-description = "This repository package an interactive bokeh-based RFI statistics report for MeerKAT observation"
+version = "0.1.0"
+description = "Interactive RFI report generator for MeerKAT data"
+authors = [{name="Isaac Sihlangu", email="isihlangu@sarao.ac.za"}]
+readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
 classifiers = [
     'Development Status :: 1 - Planning',
     'Intended Audience :: Science/Research',
     'Operating System :: POSIX :: Linux',
-    'Programming Language :: Python :: 3.10',
-]
+    'Programming Language :: Python :: 3.10',]
 dependencies = [
-    "bokeh>=3.0.0",
-    "importlib-resources",
-    "katsdpservices",
-    "katdal"
+    "katdal",
+    "panel",
+    "holoviews",
+    "dask",
+    "xarray",
+    "numpy",
+    "pandas",
+    "zarr",
+    "colorcet",
+    "katsdpservices"
 ]
-dynamic = ["version"]
+
 [project.scripts]
-"rfi_report" = "katrfireport.rfi_report_script:main"
+katrfireport = "katrfireport.cli:entry_point"
 
 [project.urls]
 Homepage="https://github.com/https://github.com/ska-sa/katrfireport"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-"katrfireport" = ["conf/*.csv"]
-
 [build-system]
-requires = [
-        "setuptools>=45",
-        "setuptools_scm[toml]>=6.0",
-]
-
-[tool.setuptools_scm]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
