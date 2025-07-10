@@ -11,17 +11,16 @@ import zarr
 from datetime import datetime
 from holoviews.operation.datashader import rasterize
 
-from .utils import bl_freq_yticks, zip_zarr_dir
+from .utils import zip_zarr_dir
 
 
-def make_dual_pol_view(zarr_store, katds, flag_name):
-    freqs = zarr_store['frequency(MHz)'][:]
-    timestamps = getattr(katds, 'timestamps', None)
-    if timestamps is None:
-        raise ValueError("katds must have 'timestamps' attribute (UNIX timestamps)")
-
-    bl_idx, baseline_lengths_sorted, baseline_names_sorted = bl_freq_yticks(katds)
-    targets = {i: katds.sensor.get('Observation/target')[i].name for i in range(katds.shape[0])}
+def make_dual_pol_view(zarr_store, flag_name):
+    freqs = zarr_store.attrs.get('frequency(MHz)')
+    timestamps = zarr_store.attrs.get('utc_times')
+    bl_idx = zarr_store.attrs.get('baseline_index_sorted')
+    baseline_lengths_sorted = zarr_store.attrs.get('baseline_lengths_sorted')
+    baseline_names_sorted = zarr_store.attrs.get('baseline_names_sorted')
+    targets = zarr_store.attrs.get('targets')
 
     # DataArrays
     da_ft_hh = xr.DataArray(
@@ -47,10 +46,10 @@ def make_dual_pol_view(zarr_store, katds, flag_name):
                                 ),
                                 ('frequency', freqs),
                                 ])
-    da_bf_hh = xr.DataArray(zarr_store[f"HH/{flag_name}/bl_freq"][bl_idx, :],
+    da_bf_hh = xr.DataArray(zarr_store[f"HH/{flag_name}/bl_freq"][:][bl_idx, :],
                             coords=[('baseline', np.arange(len(bl_idx))),
                                     ('frequency', freqs)])
-    da_bf_vv = xr.DataArray(zarr_store[f"VV/{flag_name}/bl_freq"][bl_idx, :],
+    da_bf_vv = xr.DataArray(zarr_store[f"VV/{flag_name}/bl_freq"][:][bl_idx, :],
                             coords=[('baseline', np.arange(len(bl_idx))),
                                     ('frequency', freqs)])
 
@@ -144,21 +143,20 @@ def make_dual_pol_view(zarr_store, katds, flag_name):
     return ft_row, bf_row
 
 
-def create_dual_pol_dashboard(zarr_path, katds, scan_stats=True):
+def create_dual_pol_dashboard(zarr_path, scan_stats=True):
     """
     Create an interactive Panel dashboard for dual-polarization RFI statistics visualization,
     including an extra tab with RFI fraction line plots per scan.
 
     Parameters:
     - zarr_path: str, path to Zarr data directory
-    - katds: katdal dataset
     - scan_stats_df: If True add extra tab with stats per scans.
         If False, skip the extra tab.
     """
 
     zarr_store = zarr.open(zarr_path, mode='r')
     flag_names = list(zarr_store['HH'].group_keys())
-    obs_cbid = katds.name.split('_')[0]
+    obs_cbid = zarr_store.attrs.get('capture_block_id')
 
     header = pn.pane.HTML(
         f"""
@@ -237,7 +235,7 @@ def create_dual_pol_dashboard(zarr_path, katds, scan_stats=True):
     )
 
     for flag in flag_names:
-        ft_row, bf_row = make_dual_pol_view(zarr_store, katds, flag)
+        ft_row, bf_row = make_dual_pol_view(zarr_store, flag)
 
         description = flag_description.get(flag, "No description available for this flag type.")
         info_bar = pn.pane.Markdown(
@@ -296,6 +294,7 @@ def create_dual_pol_dashboard(zarr_path, katds, scan_stats=True):
 
     # Add extra Scan Stats tab if scan_stats is True
     if scan_stats:
+        timestamps = zarr_store.attrs.get('utc_times')
         scan_stats_json = zarr_store.attrs.get('per_scan_stats', None)
         if scan_stats_json is None:
             logging.warning("Warning: No per_scan_stats attribute found in zarr store;\
@@ -306,7 +305,7 @@ def create_dual_pol_dashboard(zarr_path, katds, scan_stats=True):
             df_scan_stats = pd.DataFrame(scan_stats_list)
             df_scan_stats['utc_time'] = df_scan_stats['start_idx'].apply(
                 lambda i: datetime.utcfromtimestamp(
-                    katds.timestamps[i]).strftime('%Y-%m-%d %H:%M:%S'))
+                    timestamps[i]).strftime('%Y-%m-%d %H:%M:%S'))
             # Exclude flag types that are always zeros
             df_clean_scan = df_scan_stats[~df_scan_stats['flag_type'].isin([
                 'reserved0', 'postproc', 'static', 'predicted_rfi'])]

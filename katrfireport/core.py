@@ -8,6 +8,8 @@ import panel as pn
 import zarr
 from katdal.flags import NAMES as FLAG_NAMES
 
+from .utils import bl_freq_yticks
+
 hv.extension('bokeh')
 pn.extension('katex')
 pn.extension('mathjax')
@@ -70,9 +72,6 @@ def process_dual_pol(katds, pols, zarr_path):
     zarr_root = zarr.open(zarr_path, mode='w')
     zarr_root.attrs['description'] = 'RFI Flags occupancy stats (dual pol loop)'
     flag_names = FLAG_NAMES
-    # Save metadata from first pol
-    zarr_root.create_dataset('utc_times', data=katds.timestamps[:], dtype='f8')
-    zarr_root.create_dataset('frequency(MHz)', data=katds.freqs / 1e6, dtype='f8')
 
     all_stats = []
 
@@ -83,6 +82,18 @@ def process_dual_pol(katds, pols, zarr_path):
         stats = _process_single_pol(katds, zarr_root, pol, flag_names)
         all_stats.extend(stats)
 
+    bl_idx, baseline_lengths_sorted, baseline_names_sorted = bl_freq_yticks(katds)
+    obs_cbid = katds.name.split('_')[0]
+    targets = np.array([katds.sensor.get('Observation/target')[i].name
+                        for i in range(katds.shape[0])])
+    # Save metadata
+    zarr_root.attrs['utc_times'] = (katds.timestamps[:]).tolist()
+    zarr_root.attrs['frequency(MHz)'] = (katds.freqs / 1e6).tolist()
+    zarr_root.attrs['baseline_index_sorted'] = bl_idx.tolist()
+    zarr_root.attrs['baseline_lengths_sorted'] = baseline_lengths_sorted.tolist()
+    zarr_root.attrs['baseline_names_sorted'] = baseline_names_sorted.tolist()
+    zarr_root.attrs['capture_block_id'] = obs_cbid
+    zarr_root.attrs['targets'] = targets.tolist()
     # Save combined per-scan stats
     zarr_root.attrs['per_scan_stats'] = json.dumps(all_stats)
 
@@ -167,3 +178,18 @@ def _process_single_pol(katds, zarr_root, pol_label, flag_names):
                              dtype='f4')
 
     return scan_stats
+
+
+def write_metadata(katds, filename: str) -> None:
+    metadata = {
+        'ProductType': {
+            'ProductTypeName': 'MeerKATReductionProduct',
+            'ReductionName': 'RFIReport'
+        },
+        'Description': katds.obs_params['description'],
+        'ScheduleBlockIdCode': katds.obs_params['sb_id_code'],
+        'ProposalId': katds.obs_params['proposal_id'],
+        'CaptureBlockId': katds.obs_params['capture_block_id']
+    }
+    with open(filename, 'w') as f:
+        json.dump(metadata, f, allow_nan=False, indent=2)

@@ -46,7 +46,7 @@ def bl_freq_yticks(katds):
     baseline_lengths_sorted = baseline_lengths[bl_idx].astype(int)
     baseline_names_sorted = np.array(baseline_names)[bl_idx]
 
-    return bl_idx, baseline_lengths_sorted, baseline_names_sorted
+    return bl_idx.astype(int), baseline_lengths_sorted, baseline_names_sorted
 
 
 def zip_zarr_dir(zarr_path):
