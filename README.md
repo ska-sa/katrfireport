@@ -62,15 +62,14 @@ python3 -m katrfireport.cli serve <zarr_path> <katdata> [--port PORT] [--allow-o
 ```
 
 - ```<zarr_path>```: Path to your Zarr directory (output of compute step)
-- ```<katdata>```: Path to your MeerKAT dataset
 - ```--port```: (Optional) Port for Panel server (default: 5006)
 - ```--allow-origin```: (Optional) Allowed websocket origin for remote access
 
 Example
 ```
-python3 -m katrfireport.cli serve /scratch/isihlangu/flag_stats_1746243356.zarr 1746243356_sdp_l0.full.rdb \
-  --port 8886 \
-  --allow-origin qgpu01.sdpdyn.kat.ac.za:8886
+python3 -m katrfireport.cli serve /scratch/isihlangu/flag_rfi_stats_1746243356/flag_stats_1746243356.zarr/
+   --port 8887 \
+  --allow-origin qgpu01.sdpdyn.kat.ac.za:8887
 ```
 
 Open in browser:
