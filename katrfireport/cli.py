@@ -33,18 +33,18 @@ def compute(katdata, output_path):
         logging.info("🔹 Computing RFI statistics.")
         with ProgressBar():
             process_dual_pol(katds, ['HH', 'VV'], zarr_path)
-        os.rename(tmp_dir, output_dir)
-        logging.info(f"✅ Created Zarr: {zarr_path}")
-        # Make a best effort to clean up
-        shutil.rmtree(tmp_dir, ignore_errors=True)
     else:
         logging.info(f"✅ Zarr already exists: {zarr_path}")
-
+    os.chdir(output_path)
+    os.rename(tmp_dir, output_dir)
+    # Make a best effort to clean up
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    logging.info(f"✅ Created zarr store: {zarr_path}")
 
 def serve(zarr_path, port=5006, allow_origin=None):
     """Serve the RFI dashboard"""
     dashboard = create_dual_pol_dashboard(zarr_path)
-
+    dashboard.servable()  # 👈 Required for Panel to pick it up in pyodide/HTML export
     kwargs = {
         'address': '0.0.0.0',
         'port': port,
