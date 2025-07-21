@@ -52,7 +52,12 @@ python3 -m katrfireport.cli compute 1746243356_sdp_l0.full.rdb /scratch/isihlang
 
 This creates:
 ```
-/scratch/isihlangu/flag_stats_<CBID>.zarr
+/scratch/isihlangu/flag_rfi_stats_<CBID>
+```
+Inside there is a zarr store file and the metadata JSON file.
+```
+flag_stats_<CBID>.zarr
+metadata_<CBID>.json
 ```
 
 2. Serve the interactive dashboard
