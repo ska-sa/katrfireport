@@ -21,15 +21,15 @@ def compute(katdata, output_path):
 
     katds = katdal.open(katdata, upgrade_flags=True)
     cbid = katds.name.split('_')[0]
-    filename = f'flag_rfi_stats_{cbid}'
+    filename = f'{cbid}_flag_rfi_stats'
     output_dir = os.path.join(output_path, filename)
     tmp_dir = output_dir + '.writing'
-    zarr_path = os.path.join(tmp_dir, f'flag_stats_{cbid}.zarr')
+    zarr_path = os.path.join(tmp_dir, f'{cbid}_flag_stats.zarr')
     os.makedirs(tmp_dir, exist_ok=True)
     os.chdir(tmp_dir)
     if not os.path.exists(zarr_path):
         logging.info("🔹 Extracting metadata and saving it to json file.")
-        write_metadata(katds, f'metadata_{cbid}.json')
+        write_metadata(katds, f'metadata.json')
         logging.info("🔹 Computing RFI statistics.")
         with ProgressBar():
             process_dual_pol(katds, ['HH', 'VV'], zarr_path)
@@ -44,7 +44,7 @@ def compute(katdata, output_path):
 def serve(zarr_path, port=5006, allow_origin=None):
     """Serve the RFI dashboard"""
     dashboard = create_dual_pol_dashboard(zarr_path)
-    dashboard.servable()  # 👈 Required for Panel to pick it up in pyodide/HTML export
+    dashboard.servable()  # Required for Panel to pick it up in pyodide/HTML export
     kwargs = {
         'address': '0.0.0.0',
         'port': port,
