@@ -12,8 +12,19 @@ from .core import process_dual_pol, write_metadata
 from .dashboard import create_dual_pol_dashboard
 
 
+def export_static(zarr_path, output_dir):
+    """Export the RFI dashboard as a standalone static HTML file in the same folder as Zarr."""
+    dashboard = create_dual_pol_dashboard(zarr_path)
+    pn.extension()
+
+    cbid = os.path.basename(zarr_path).split("_")[0]
+    output_html = os.path.join(output_dir, f"{cbid}_MeerKAT_Static_RFI_report.html")
+
+    dashboard.save(output_html, embed=True, resources='inline', title="MeerKAT RFI Report")
+    logging.info(f"Static HTML dashboard saved to {output_html}")
+    
 def compute(katdata, output_path):
-    """Compute RFI stats and save Zarr data"""
+    """Compute RFI stats and save Zarr data + HTML report in the same folder."""
     # Setup logging
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
@@ -25,26 +36,31 @@ def compute(katdata, output_path):
     output_dir = os.path.join(output_path, filename)
     tmp_dir = output_dir + '.writing'
     zarr_path = os.path.join(tmp_dir, f'{cbid}_flag_stats.zarr')
+
     os.makedirs(tmp_dir, exist_ok=True)
     os.chdir(tmp_dir)
+
     if not os.path.exists(zarr_path):
-        logging.info("🔹 Extracting metadata and saving it to json file.")
-        write_metadata(katds, f'metadata.json')
-        logging.info("🔹 Computing RFI statistics.")
+        logging.info("Extracting metadata and saving it to json file.")
+        write_metadata(katds, 'metadata.json')
+        logging.info("Computing RFI statistics.")
         with ProgressBar():
             process_dual_pol(katds, ['HH', 'VV'], zarr_path)
     else:
-        logging.info(f"✅ Zarr already exists: {zarr_path}")
+        logging.info(f"Zarr already exists: {zarr_path}")
+
+    # Export HTML into .writing folder (same place as Zarr + metadata)
+    logging.info("Exporting static HTML dashboard.")
+    export_static(zarr_path, tmp_dir)
+
     os.chdir(output_path)
     os.rename(tmp_dir, output_dir)
-    # Make a best effort to clean up
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    logging.info(f"✅ Created zarr store: {zarr_path}")
+    logging.info(f"Finalized report directory: {output_dir}")
 
 def serve(zarr_path, port=5006, allow_origin=None):
     """Serve the RFI dashboard"""
     dashboard = create_dual_pol_dashboard(zarr_path)
-    dashboard.servable()  # Required for Panel to pick it up in pyodide/HTML export
+    dashboard.servable()  # Required for static HTML
     kwargs = {
         'address': '0.0.0.0',
         'port': port,
@@ -57,7 +73,7 @@ def serve(zarr_path, port=5006, allow_origin=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate and serve MeerKAT RFI reports")
+    parser = argparse.ArgumentParser(description="Generate, serve or export MeerKAT RFI reports")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # Compute command
@@ -77,7 +93,6 @@ def main():
         compute(args.katdata, args.output_path)
     elif args.command == "serve":
         serve(args.zarr_path, port=args.port, allow_origin=args.allow_origin)
-
-
+   
 if __name__ == "__main__":
     main()

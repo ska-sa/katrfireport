@@ -76,7 +76,7 @@ def process_dual_pol(katds, pols, zarr_path):
     all_stats = []
 
     for pol in pols:
-        logging.info(f"🔹 Processing pol: {pol}")
+        logging.info(f"Processing pol: {pol}")
         katds.select(corrprods='cross', scans='track', pol=pol)
 
         stats = _process_single_pol(katds, zarr_root, pol, flag_names)
