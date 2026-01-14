@@ -1,0 +1,36 @@
+[project]
+name = "katrfireport"
+version = "0.1.0"
+description = "Interactive RFI report generator for MeerKAT data"
+authors = [{name="Isaac Sihlangu", email="isihlangu@sarao.ac.za"}]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+classifiers = [
+    'Development Status :: 1 - Planning',
+    'Intended Audience :: Science/Research',
+    'Operating System :: POSIX :: Linux',
+    'Programming Language :: Python :: 3.10',]
+dependencies = [
+    "katdal",
+    "panel",
+    "holoviews",
+    "dask",
+    "xarray",
+    "numpy",
+    "pandas",
+    "zarr",
+    "colorcet",
+    "katsdpservices",
+    "datashader"
+]
+
+[project.scripts]
+katrfireport = "katrfireport.cli:entry_point"
+
+[project.urls]
+Homepage="https://github.com/https://github.com/ska-sa/katrfireport"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
