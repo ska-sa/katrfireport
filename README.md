@@ -13,10 +13,10 @@ It processes `katdal` datasets to generate Zarr-format RFI flag statistics and p
 
 - Compute per-polarisation RFI flagging statistics from MeerKAT `katdal` datasets  
 - Save detailed RFI flag statistics in efficient Zarr format  
-- Interactive dashboards with linked frequency-time and baseline-frequency plots  
-- Hover and click interactions reveal detailed RFI fraction info by frequency, time, and baseline  
+- Interactive dashboards with linked frequency-time and baseline-frequency plots for cross correlation products.
+- Interactive dashboards with linked frequency-time plots for auto correlation products. 
+- Hover and click interactions reveal detailed RFI fraction info by frequency, time, baseline and antenna.
 - Download the underlying Zarr data for offline analysis  
-- Scan-based RFI fraction summaries with weighted averages and detailed plots
 
 ---
 
@@ -37,50 +37,31 @@ pip install -e .
 
 ## Usage
 
-The tool provides two main commands via the CLI:
-1. Compute RFI statistics
+The tool provides two modes, the online and offline version.
+1. Online mode: Compute RFI statistics, save it to a zarr store and create HTML RFI report.
 ```
-python3 -m katrfireport.cli compute <katdata> <output_dir>
+python3 -m katrfireport.rfireport_pipeline run <katdata> <output_dir>
 ```
 - ```<katdata>```: Path to your MeerKAT dataset (e.g., 1746243356_sdp_l0.full.rdb)
 - ```<output_dir>```: Directory to save the Zarr output
 
 Example,
 ```
-python3 -m katrfireport.cli compute 1746243356_sdp_l0.full.rdb /scratch/isihlangu
+python3 -m katrfireport.rfireport_pipeline run 1746243356_sdp_l0.full.rdb /scratch/isihlangu
 ```
 
 This creates:
 ```
 /scratch/isihlangu/flag_rfi_stats_<CBID>
 ```
-Inside there is a zarr store file and the metadata JSON file.
+Inside there is a zarr store file, the metadata JSON file and the HTML RFI report.
 ```
 flag_stats_<CBID>.zarr
 metadata_<CBID>.json
+<CBID>_MeerKAT_Static_RFI_report.html
 ```
 
-2. Serve the interactive dashboard
-Once the Zarr data exists, serve the dashboard:
-```
-python3 -m katrfireport.cli serve <zarr_path> <katdata> [--port PORT] [--allow-origin ORIGIN]
-```
-
-- ```<zarr_path>```: Path to your Zarr directory (output of compute step)
-- ```--port```: (Optional) Port for Panel server (default: 5006)
-- ```--allow-origin```: (Optional) Allowed websocket origin for remote access
-
-Example
-```
-python3 -m katrfireport.cli serve /scratch/isihlangu/flag_rfi_stats_1746243356/flag_stats_1746243356.zarr/
-   --port 8887 \
-  --allow-origin qgpu01.sdpdyn.kat.ac.za:8887
-```
-
-Open in browser:
-```
-http://<your-host>:<port>
-```
+1. Offline mode: Compute RFI statistics, save it to a zarr store and serve.
 
 
 
