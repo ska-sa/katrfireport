@@ -1,396 +1,352 @@
-import json
-import logging
+from katdal.flags import NAMES as FLAG_NAMES
 
-import colorcet as cc
 import holoviews as hv
 import numpy as np
 import panel as pn
-import pandas as pd
 import xarray as xr
 import zarr
-from datetime import datetime
 from holoviews.operation.datashader import rasterize
 
-from .utils import zip_zarr_dir
 
+class RFIReportBase:
+    def __init__(self, zarr_store):
+        self.zarr = zarr_store
+        self.cross_root = zarr_store["crosscorr"]
 
-def make_dual_pol_view(zarr_store, flag_name):
-    freqs = zarr_store.attrs.get('frequency(MHz)')
-    timestamps = zarr_store.attrs.get('utc_times')
-    bl_idx = zarr_store.attrs.get('baseline_index_sorted')
-    baseline_lengths_sorted = zarr_store.attrs.get('baseline_lengths_sorted')
-    baseline_names_sorted = zarr_store.attrs.get('baseline_names_sorted')
-    targets = zarr_store.attrs.get('targets')
+        # ---- metadata ----
+        self.freqs = np.asarray(self.cross_root.attrs["frequency(MHz)"])
+        self.timestamps = np.asarray(self.cross_root.attrs["utc_times"])
+        self.targets = self.cross_root.attrs["targets"]
 
-    # DataArrays
-    da_ft_hh = xr.DataArray(
-        zarr_store[f"HH/{flag_name}/freq_time"][:],
-        coords=[
-            (
-                'time',
-                np.arange(
-                    zarr_store[f"HH/{flag_name}/freq_time"].shape[0]
-                )
-            ),
-            ('frequency', freqs),
-        ]
-    )
+        self.baseline_lengths = self.cross_root.attrs.get(
+            "baseline_lengths_sorted", None
+        )
+        self.baseline_names = self.cross_root.attrs.get("baseline_names_sorted", None)
 
-    da_ft_vv = xr.DataArray(zarr_store[f"VV/{flag_name}/freq_time"][:],
-                            coords=[
-                                (
-                                    'time',
-                                    np.arange(
-                                        zarr_store[f"VV/{flag_name}/freq_time"].shape[0]
-                                    )
-                                ),
-                                ('frequency', freqs),
-                                ])
-    da_bf_hh = xr.DataArray(zarr_store[f"HH/{flag_name}/bl_freq"][:][bl_idx, :],
-                            coords=[('baseline', np.arange(len(bl_idx))),
-                                    ('frequency', freqs)])
-    da_bf_vv = xr.DataArray(zarr_store[f"VV/{flag_name}/bl_freq"][:][bl_idx, :],
-                            coords=[('baseline', np.arange(len(bl_idx))),
-                                    ('frequency', freqs)])
-
-    # Hover info panels
-    ft_info = pn.pane.Markdown("**Freq-Time Hover info:**", width=900)
-    bf_info = pn.pane.Markdown("**Baseline-Freq Hover info:**", width=900)
-
-    def make_dynamic_plot(da, ydim, ylabel, title, info_pane, ylabels):
+    def make_dynamic_plot(self, da, ydim, ylabel, title, ylabels, static=False):
         range_stream = hv.streams.RangeXY()
-
-        base_img = hv.Image(da, kdims=['frequency', ydim])
+        base_img = hv.Image(da, kdims=["frequency", ydim])
         raster_img = rasterize(base_img, dynamic=False)
-
-        stream = hv.streams.Tap(source=raster_img)
-
-        def callback(x, y):
-            if x is None or y is None:
-                info_pane.object = f"**{title} Hover info:**"
-                return
-            freq_idx = (np.abs(da['frequency'].values - x)).argmin()
-            y_idx = (np.abs(da[ydim].values - y)).argmin()
-            z_val = da.values[y_idx, freq_idx]
-
-            if ydim == 'time':
-                if 0 <= y_idx < len(timestamps):
-                    utc_time = datetime.utcfromtimestamp(
-                        timestamps[y_idx]).strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    utc_time = "Out of range"
-                info_pane.object = (
-                    f"**{title}**  \n"
-                    f"Frequency: {x:.2f} MHz  \n"
-                    f"Time (UTC): {utc_time}  \n"
-                    f"RFI Fraction: {z_val:.4f}"
-                )
-            else:
-                if 0 <= y_idx < len(ylabels):
-                    bl_name = baseline_names_sorted[y_idx]
-                    bl_len = baseline_lengths_sorted[y_idx]
-                else:
-                    bl_name = "Unknown"
-                    bl_len = "N/A"
-                info_pane.object = (
-                    f"**{title}**  \n"
-                    f"Frequency: {x:.2f} MHz  \n"
-                    f"Baseline: {bl_name}  \n"
-                    f"Length: {bl_len:.2f} m  \n"
-                    f"RFI Fraction: {z_val:.4f}"
-                )
-
-        stream.add_subscriber(lambda **kwargs: callback(kwargs.get('x'), kwargs.get('y')))
 
         def dyn_plot(x_range=None, y_range=None):
             yticks = None
             if y_range is not None:
                 y_vals = da[ydim].values
                 mask = (y_vals >= y_range[0]) & (y_vals <= y_range[1])
-                visible_idx = y_vals[mask]
-                if len(visible_idx) > 0:
-                    step = max(1, len(visible_idx) // 8)
-                    yticks = [(v, ylabels[int(v)])
-                              for v in visible_idx[::step] if int(v) < len(ylabels)]
+                visible = y_vals[mask]
+                if len(visible) > 0:
+                    step = max(1, len(visible) // 8)
+                    yticks = [
+                        (v, ylabels[int(v)])
+                        for v in visible[::step]
+                        if int(v) < len(ylabels)
+                    ]
+
             return raster_img.opts(
-                cmap='Viridis', colorbar=True, width=950, height=500,
-                xlabel='Frequency (MHz)', ylabel=ylabel,
-                yticks=yticks, title=title, tools=['tap']
+                cmap="Viridis",
+                colorbar=True,
+                width=1200,
+                height=500,
+                xlabel="Frequency (MHz)",
+                ylabel=ylabel,
+                yticks=yticks,
+                title=title,
+                tools=["tap"],
             )
+
+        if static:
+            return dyn_plot(y_range=(da[ydim].values.min(), da[ydim].values.max()))
 
         dmap = hv.DynamicMap(dyn_plot, streams=[range_stream])
-        overlay = dmap * raster_img
-        return overlay
-
-    ft_hh = make_dynamic_plot(da_ft_hh, 'time', 'Target names', f'{flag_name} HH', ft_info,
-                              [targets[i] for i in range(len(targets))])
-    ft_vv = make_dynamic_plot(da_ft_vv, 'time', '', f'{flag_name} VV', ft_info,
-                              [targets[i] for i in range(len(targets))])
-    bf_hh = make_dynamic_plot(da_bf_hh, 'baseline', 'Baseline length (m)', f'{flag_name} HH',
-                              bf_info, baseline_lengths_sorted)
-    bf_vv = make_dynamic_plot(da_bf_vv, 'baseline', '', f'{flag_name} VV', bf_info,
-                              baseline_lengths_sorted)
-
-    ft_row = pn.Column(
-        pn.Row(ft_hh, ft_vv),
-        pn.Row(ft_info, align='center')
-    )
-    bf_row = pn.Column(
-        pn.Row(bf_hh, bf_vv),
-        pn.Row(bf_info, align='center')
-    )
-
-    return ft_row, bf_row
+        return dmap * raster_img
 
 
-def create_dual_pol_dashboard(zarr_path, scan_stats=True):
+class CrossCorrView(RFIReportBase):
     """
-    Create an interactive Panel dashboard for dual-polarization RFI statistics visualization,
-    including an extra tab with RFI fraction line plots per scan.
+    Cross-correlation RFI visualisation.
 
-    Parameters:
-    - zarr_path: str, path to Zarr data directory
-    - scan_stats_df: If True add extra tab with stats per scans.
-        If False, skip the extra tab.
+    Produces:
+    - Frequency–Time plots (HH & VV)
+    - Baseline–Frequency plots (HH & VV)
     """
 
-    zarr_store = zarr.open(zarr_path, mode='r')
-    flag_names = list(zarr_store['HH'].group_keys())
-    obs_cbid = zarr_store.attrs.get('capture_block_id')
+    def __init__(self, zarr_store):
+        super().__init__(zarr_store)
 
-    header = pn.pane.HTML(
-        f"""
-        <div style="text-align: center;">
-        <h1 style="color:#333; font-weight:bold; font-size: 32px; margin-bottom: 0;">
-            MeerKAT RFI REPORT FOR OBSERVATION WITH CBID {obs_cbid}
-        </h1>
-        </div>
-        """,
-        margin=(10, 10)
-    )
-
-    report_description = pn.pane.Markdown(
-        """
-        <div style="font-size:16px;">
-        This interactive report summarizes radio-frequency interference (RFI) statistics
-        detected during the observation. It provides both frequency-time and baseline-frequency
-        visualizations for each flag type across HH and VV polarizations.
-
-        **Functionality of this report:**
-        - 📊 Interactive frequency-time and baseline-frequency plots for each flag type.
-        - 🖱️ Click on (or tap) a point in any plot to display detailed information below the plot:
-          frequency, time (UTC), baseline name, baseline length, and RFI fraction.
-        - 🔍 Zoom into a section of a plot — all other linked plots will zoom to the same region.
-        - 🗂️ Explore different flag types using tabs (each tab corresponds to a different\
-        flag type).
-        - 📥 Download a ZIP file of the underlying Zarr data for further analysis.
-        </div>
-        """,
-        margin=(10, 5)
-    )
-
-    flag_description = {
-        "ALL": "All flag types combined.",
-        "cal_rfi": "Flags from the calibration pipeline (SDP AOFlagger).",
-        "cam": "Flags from the control and monitoring system (e.g. antenna down).",
-        "data_lost": "Data missing from the correlator.",
-        "ingest_rfi": "High-time-resolution RFI flags from ingest.",
-        "postproc": "Flags from failed or invalid calibration solutions.",
-        "predicted_rfi": "Satellite RFI predictions (not in use currently).",
-        "reserved": "Reserved for future use.",
-        "static": " Known persistent RFI channels.",
-    }
-    scan_stats_description = pn.pane.Markdown(
-        """
-        <div style="font-size:16px;">
-        ### RFI Scan Statistics Summary
-        This tab presents interactive plots of raw and weighted RFI fraction flagged per scan,\
-        for each flag type.
-
-        - **Raw Fraction Flagged**: The fraction of data flagged within each scan.
-        - **Weighted Fraction Flagged**: Average fraction flagged across scans, weighted by\
-        scan duration:
-
-        $$
-        \\text{Weighted Fraction} = \\frac{\\sum (\\text{fraction flagged} \\times
-        \\text{scan duration})}{\\sum \\text{scan duration}}
-        $$
-
-        - **Flag Type Definitions**:
-        - `ALL`: All flag types combined.
-        - `cal_rfi`: Flags from the calibration pipeline (SDP AOFlagger).
-        - `cam`: Flags from the control and monitoring system (e.g. antenna down).
-        - `data_lost`: Data missing from the correlator.
-        - `ingest_rfi`: High-time-resolution RFI flags from ingest.
-        </div>
-        """,
-        margin=(10, 5)
-    )
-
-    freq_time_tabset = pn.Tabs(
-        styles={'background': '#fafafa'}, margin=(10, 10), sizing_mode='stretch_both'
-    )
-    bl_freq_tabset = pn.Tabs(
-        styles={'background': '#fafafa'}, margin=(10, 10), sizing_mode='stretch_both'
-    )
-
-    for flag in flag_names:
-        ft_row, bf_row = make_dual_pol_view(zarr_store, flag)
-
-        description = flag_description.get(flag, "No description available for this flag type.")
-        info_bar = pn.pane.Markdown(
-            f"ℹ️ **{flag}**: {description}",
-            styles={'color': '#555', 'background': '#f9f9f9', 'padding': '5px',
-                    'border': '1px solid #ccc'},
-            margin=(5, 5)
+    @property
+    def description(self):
+        return pn.pane.HTML(
+            """
+            <div style="font-size:16px; padding:10px;">
+              <h3>Cross-Correlation RFI Statistics</h3>
+              <p>
+                This tab summarises RFI statistics derived from
+                <b>cross-correlated visibilities</b>.
+              </p>
+            </div>
+            """,
+            sizing_mode="stretch_width",
+            margin=(10, 10),
         )
 
-        freq_time_tabset.append(
-            (
-                f"{flag}",
-                pn.Column(
-                    info_bar,
-                    ft_row,
-                    margin=5,
-                    styles={'border': '1px solid #ddd', 'border-radius': '5px'},
-                ),
+    # --------------------------------
+    # Plot construction for one flag
+    # -------------------------------
+    def dual_pol_view(self, flag_name):
+        root = self.cross_root
+        bl_idx = np.asarray(root.attrs["baseline_index_sorted"])
+
+        # -------- freq–time DataArray --------
+        def ft_da(pol):
+            data = root[f"{pol}/{flag_name}/freq_time"][:]
+            return xr.DataArray(
+                data,
+                dims=("time", "frequency"),
+                coords={
+                    "time": np.arange(data.shape[0]),
+                    "frequency": self.freqs,
+                },
+                name="freq_time",
             )
-        )
 
-        bl_freq_tabset.append(
-            (
-                f"{flag}",
-                pn.Column(
-                    info_bar,
-                    bf_row,
-                    margin=5,
-                    styles={'border': '1px solid #ddd', 'border-radius': '5px'},
-                ),
+        # -------- baseline–frequency DataArray --------
+        def bf_da(pol):
+            data = root[f"{pol}/{flag_name}/bl_freq"][:][bl_idx, :]
+            return xr.DataArray(
+                data,
+                dims=("baseline", "frequency"),
+                coords={
+                    "baseline": np.arange(len(bl_idx)),
+                    "frequency": self.freqs,
+                },
+                name="bl_freq",
             )
+
+        # -------- plots --------
+        ft_hh = self.make_dynamic_plot(
+            ft_da("HH"),
+            ydim="time",
+            ylabel="Target",
+            title=f"{flag_name} HH",
+            ylabels=self.targets,
         )
 
-    # Add download button
-    download_button = pn.widgets.FileDownload(
-        callback=lambda: zip_zarr_dir(zarr_path),
-        filename='zarr_data.zip',
-        label='📥 Download RFI Statistics Zarr File',
-    )
-
-    # Group freq + bl freq into their own Panel column with the description
-    freq_bl_panel = pn.Column(
-        report_description,
-        pn.Tabs(
-            ("📊 Frequency-Time", freq_time_tabset),
-            ("📈 Baseline-Frequency", bl_freq_tabset),
-            tabs_location='above',  # or 'left' if you prefer
-            styles={'background': '#fafafa'},
-            sizing_mode='stretch_both'
+        ft_vv = self.make_dynamic_plot(
+            ft_da("VV"),
+            ydim="time",
+            ylabel="",
+            title=f"{flag_name} VV",
+            ylabels=self.targets,
         )
-    )
 
-    # Create main tabs container
-    main_tabs_items = [
-        ("📊 RFI Waterfall Plots", freq_bl_panel),]
+        bf_hh = self.make_dynamic_plot(
+            bf_da("HH"),
+            ydim="baseline",
+            ylabel="Baseline length (m)",
+            title=f"{flag_name} HH",
+            ylabels=self.baseline_lengths,
+        )
 
-    # Add extra Scan Stats tab if scan_stats is True
-    if scan_stats:
-        timestamps = zarr_store.attrs.get('utc_times')
-        scan_stats_json = zarr_store.attrs.get('per_scan_stats', None)
-        if scan_stats_json is None:
-            logging.warning("Warning: No per_scan_stats attribute found in zarr store;\
-            skipping Scan Stats tab.")
-            pass
-        else:
-            scan_stats_list = json.loads(scan_stats_json)
-            df_scan_stats = pd.DataFrame(scan_stats_list)
-            df_scan_stats['utc_time'] = df_scan_stats['start_idx'].apply(
-                lambda i: datetime.utcfromtimestamp(
-                    timestamps[i]).strftime('%Y-%m-%d %H:%M:%S'))
-            # Exclude flag types that are always zeros
-            df_clean_scan = df_scan_stats[~df_scan_stats['flag_type'].isin([
-                'reserved0', 'postproc', 'static', 'predicted_rfi'])]
-            line_hh = make_line_plot(df_clean_scan, 'HH')
-            line_vv = make_line_plot(df_clean_scan, 'VV')
-            scan_stats_pane = pn.Column(
-                    scan_stats_description,
-                    pn.Row(
-                        pn.pane.HoloViews(line_hh),
-                        pn.pane.HoloViews(line_vv),
-                        margin=10
-                    )
+        bf_vv = self.make_dynamic_plot(
+            bf_da("VV"),
+            ydim="baseline",
+            ylabel="",
+            title=f"{flag_name} VV",
+            ylabels=self.baseline_lengths,
+        )
+
+        ft_row = pn.Column(ft_hh, ft_vv, sizing_mode="stretch_width")
+        bf_row = pn.Column(bf_hh, bf_vv, sizing_mode="stretch_width")
+
+        return ft_row, bf_row
+
+    # -----------------------------
+    # Build the CrossCorr tab
+    # -----------------------------
+    def build_tab(self):
+        flag_names = list(self.cross_root.attrs["flag_names"])
+        if "ALL" not in flag_names:
+            flag_names.append("ALL")
+
+        freq_time_tabs = pn.Tabs(
+            sizing_mode="stretch_width",
+            styles={"background": "#fafafa"},
+        )
+
+        bl_freq_tabs = pn.Tabs(
+            sizing_mode="stretch_width",
+            styles={"background": "#fafafa"},
+        )
+
+        for flag in flag_names:
+            ft_row, bf_row = self.dual_pol_view(flag)
+
+            freq_time_tabs.append(
+                (
+                    flag,
+                    pn.Column(
+                        ft_row,
+                        sizing_mode="stretch_width",
+                        styles={
+                            "background": "#fafafa",
+                            "padding": "10px",
+                            "border": "1px solid #ddd",
+                            "border-radius": "5px",
+                        },
+                    ),
                 )
-
-            main_tabs_items.append(
-                ("📉RFI Scan Summary", scan_stats_pane)
             )
 
-        main_tabs = pn.Tabs(
-            *main_tabs_items,
-            tabs_location='left',
-            styles={'background': '#eee'},
-            sizing_mode='stretch_both',
+            bl_freq_tabs.append(
+                (
+                    flag,
+                    pn.Column(
+                        bf_row,
+                        sizing_mode="stretch_width",
+                        styles={
+                            "background": "#fafafa",
+                            "padding": "10px",
+                            "border": "1px solid #ddd",
+                            "border-radius": "5px",
+                        },
+                    ),
+                )
+            )
+
+        return pn.Column(
+            self.description,
+            pn.Tabs(
+                ("📊 Frequency-Time", freq_time_tabs),
+                ("📈 Baseline-Frequency", bl_freq_tabs),
+                tabs_location="above",
+                sizing_mode="stretch_width",
+            ),
+            sizing_mode="stretch_width",
         )
-    return pn.Column(header, download_button, main_tabs)
 
 
-def make_line_plot(df, pol):
-    df_pol = df[df['pol'] == pol].copy()
-    overlays = []
-    color_list = cc.glasbey_dark  # Distinct colors
-    flag_types = df_pol['flag_type'].unique()
+class AutoCorrView(RFIReportBase):
+    def __init__(self, zarr_store, pol="HH"):
+        super().__init__(zarr_store)
+        self.auto_root = zarr_store["autocorr"]
+        self.pol = pol
+        self.antennas = self.auto_root.attrs["antenna_names"]
 
-    for i, flag_type in enumerate(flag_types):
-        df_flag = df_pol[df_pol['flag_type'] == flag_type].copy()
-        # Compute weighted average
-        weighted_frac = (
-            (df_flag['fraction_flagged'] * df_flag['scan_duration']).sum() /
-            df_flag['scan_duration'].sum()
-        )
-        # Add weighted_frac so it appears in hover
-        df_flag['weighted_fraction_flagged'] = weighted_frac
-        # Common color
-        color = color_list[i % len(color_list)]
-        # Update label to include weighted avg
-        label = f"{flag_type} (weighted avg: {weighted_frac:.3f})"
-        # Raw fraction flagged curve
-        curve = hv.Curve(
-            df_flag,
-            kdims='scan_index',
-            vdims=[
-                ('fraction_flagged', 'Raw Fraction Flagged'),
-                ('weighted_fraction_flagged', 'Weighted Fraction Flagged'),
-                ('target_name', 'Target'),
-                ('utc_time', 'UTC Time')
-            ],
-            label=label
-        ).opts(
-            tools=['hover'],
-            color=color,
-            width=1000,
-            height=600,
-            padding=0.1,
-            show_legend=True
-        )
-        # Markers at scan points
-        points = hv.Scatter(
-            df_flag,
-            kdims='scan_index',
-            vdims=[
-                ('fraction_flagged', 'Raw Fraction Flagged'),
-                ('weighted_fraction_flagged', 'Weighted Fraction Flagged'),
-                ('target_name', 'Target'),
-                ('utc_time', 'UTC Time')
-            ]
-        ).opts(
-            color=color,
-            marker='circle',
-            size=6,
-            tools=['hover'],
-            show_legend=False
-        )
-        overlays.append(curve * points)
+    @property
+    def description(self):
+        return pn.pane.HTML(
+            """
+            <div style="font-size:16px; padding:10px;">
+              <h3>Auto-Correlation RFI Statistics</h3>
 
-    return hv.Overlay(overlays).opts(
-        title=f"RFI Fraction Flagged with Weighted Avg - {pol}",
-        legend_position='right'
-    )
+              <p>
+                This tab summarises RFI statistics derived from
+                <b>auto-correlated visibilities</b>.
+              </p>
+
+              <p>
+                You can select an antenna of interest and see the
+                contributions of different flag bits.
+              </p>
+            </div>
+            """,
+            sizing_mode="stretch_width",
+            margin=(10, 10),
+        )
+
+    def antenna_freq_panel(self):
+        flag_types = list(FLAG_NAMES)
+        if "ALL" not in flag_types:
+            flag_types.append("ALL")
+        da_flags = {
+            flag: xr.DataArray(
+                self.auto_root[f"{self.pol}/{flag}/freq_time"][:],
+                dims=("time", "antenna", "frequency"),
+                coords={
+                    "time": np.arange(
+                        self.auto_root[f"{self.pol}/{flag}/freq_time"].shape[0]
+                    ),
+                    "antenna": np.arange(
+                        self.auto_root[f"{self.pol}/{flag}/freq_time"].shape[1]
+                    ),
+                    "frequency": self.freqs,
+                },
+            )
+            for flag in flag_types
+        }
+
+        antenna_selector = pn.widgets.Select(
+            name="Antenna",
+            options={name: i for i, name in enumerate(self.antennas)},
+            value=0,
+            width=250,
+        )
+
+        def make_plot(flag, antenna_idx):
+            da = da_flags[flag].isel(antenna=antenna_idx)
+            return self.make_dynamic_plot(
+                da,
+                ydim="time",
+                ylabel="Target",
+                title=f"{flag} – Antenna {self.antennas[antenna_idx]}",
+                ylabels=self.targets,
+            )
+
+        # Create reactive bound plots
+        plots = [
+            pn.bind(make_plot, flag, antenna_selector.param.value)
+            for flag in flag_types
+        ]
+
+        reactive_plots = [pn.panel(p, linked_axes=True) for p in plots]
+
+        plots_card = pn.Column(
+            pn.Row(pn.Spacer(width=10), antenna_selector),
+            *reactive_plots,
+            sizing_mode="stretch_width",
+        )
+
+        return pn.Column(
+            plots_card,
+            sizing_mode="stretch_width",
+        )
+
+    def dashboard_tab(self):
+        return pn.Column(
+            self.description,
+            pn.Tabs(
+                ("Frequency-Time", self.antenna_freq_panel()),
+                tabs_location="above",
+                sizing_mode="stretch_width",
+            ),
+            sizing_mode="stretch_width",
+        )
+
+
+class RFIDashboard:
+    def __init__(self, zarr_path):
+        self.zarr = zarr.open(zarr_path, mode="r")
+        self.cross_view = CrossCorrView(self.zarr)
+        self.auto_view = AutoCorrView(self.zarr)
+
+        self.obs_cbid = self.zarr["crosscorr"].attrs["capture_block_id"]
+        self.flag_names = self.zarr["crosscorr"].attrs["flag_names"]
+
+    def build(self):
+        header = pn.pane.HTML(
+            f"<h1>MeerKAT RFI Report – {self.obs_cbid}</h1>",
+            sizing_mode="stretch_width",
+        )
+
+        cross_tab = self.cross_view.build_tab()
+        auto_tab = self.auto_view.dashboard_tab()
+
+        return pn.Column(
+            header,
+            pn.Tabs(
+                ("Cross Correlation", cross_tab),
+                ("Auto Correlation", auto_tab),
+                tabs_location="left",
+            ),
+            sizing_mode="stretch_both",
+        )
