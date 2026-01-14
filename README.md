@@ -61,7 +61,7 @@ metadata_<CBID>.json
 <CBID>_MeerKAT_Static_RFI_report.html
 ```
 
-1. Offline mode: Compute RFI statistics, save it to a zarr store and serve.
+2. Offline mode: Serve the interactive dashboard Once the Zarr data exists, serve the dashboard using panel. This mode offers the user with a full interactive plots for further analysis of the RFI.
 
 
 
